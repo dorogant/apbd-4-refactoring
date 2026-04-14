@@ -34,3 +34,4 @@
 /Users/antonchurchyn/Downloads/zadanie_refactoring_renewal/LegacyRenewalAppConsumer/obj/Debug/net8.0/LegacyRenewalAppConsumer.pdb
 /Users/antonchurchyn/Downloads/zadanie_refactoring_renewal/LegacyRenewalAppConsumer/obj/Debug/net8.0/LegacyRenewalAppConsumer.genruntimeconfig.cache
 /Users/antonchurchyn/Downloads/zadanie_refactoring_renewal/LegacyRenewalAppConsumer/obj/Debug/net8.0/ref/LegacyRenewalAppConsumer.dll
+/Users/antonchurchyn/Downloads/zadanie_refactoring_renewal/LegacyRenewalAppConsumer/obj/Debug/net8.0/LegacyRenewalAppConsumer.sourcelink.json

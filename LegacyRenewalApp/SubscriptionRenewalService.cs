@@ -1,5 +1,12 @@
 using System;
+using System.Collections.Generic;
+using LegacyRenewalApp.Helpers;
+using LegacyRenewalApp.Helpers.PaymentFeeStrategies;
+using LegacyRenewalApp.Helpers.Rules;
+using LegacyRenewalApp.Helpers.SupportFeeStrategies;
+using LegacyRenewalApp.Helpers.TaxRateStrategies;
 using LegacyRenewalApp.Interfaces;
+using LegacyRenewalApp.Models;
 
 namespace LegacyRenewalApp
 {
@@ -8,18 +15,100 @@ namespace LegacyRenewalApp
         private readonly ICustomerRepository _customerRepository;
         private readonly ISubscriptionPlanRepository _subscriptionPlanRepository;
         private readonly IRenewalServiceValidator _validator;
-        
-        public SubscriptionRenewalService() 
-            : this(new CustomerRepository(), new SubscriptionPlanRepository(), new RenewalServiceValidator()) 
-        { }
-        
-        public SubscriptionRenewalService
-            (ICustomerRepository customerRepository, 
-                ISubscriptionPlanRepository subscriptionPlanRepository, IRenewalServiceValidator validator)
+        private readonly IDiscountCalculator _discountCalculator;
+        private readonly IPaymentFeeCalculator _paymentFeeCalculator;
+        private readonly ISupportFeeCalculator _supportFeeCalculator;
+        private readonly ITaxRateCalculator _taxRateCalculator;
+
+        public SubscriptionRenewalService()
+            : this(
+                new CustomerRepository(),
+                new SubscriptionPlanRepository(),
+                new RenewalServiceValidator(),
+                new DiscountCalculator(new List<IDiscountRule>
+                {
+                    new SegmentDiscountRule(),
+                    new LoyaltyYearsDiscountRule(),
+                    new SeatCountDiscountRule(),
+                    new LoyaltyPointsDiscountRule()
+                }),
+                new PaymentFeeCalculator(new Dictionary<string, IPaymentFeeStrategy>
+                {
+                    { "CARD", new CardPaymentFeeStrategy() },
+                    { "BANK_TRANSFER", new BankTransferPaymentFeeStrategy() },
+                    { "PAYPAL", new PayPalPaymentFeeStrategy() },
+                    { "INVOICE", new InvoicePaymentFeeStrategy() }
+                }),
+                new SupportFeeCalculator(new Dictionary<string, ISupportFeeStrategy>
+                {
+                    { "START", new StartSupportFeeStrategy() },
+                    { "PRO", new ProSupportFeeStrategy() },
+                    { "ENTERPRISE", new EnterpriseSupportFeeStrategy() }
+                }),
+                new TaxRateCalculator(new Dictionary<string, ITaxRateStrategy>
+                {
+                    { "Poland", new PolandTaxRateStrategy() },
+                    { "Germany", new GermanyTaxRateStrategy() },
+                    { "Czech Republic", new CzechRepublicTaxRateStrategy() },
+                    { "Norway", new NorwayTaxRateStrategy() }
+                }, new DefaultTaxRateStrategy()))
+        {
+        }
+
+        public SubscriptionRenewalService(
+            ICustomerRepository customerRepository,
+            ISubscriptionPlanRepository subscriptionPlanRepository,
+            IRenewalServiceValidator validator)
+            : this(
+                customerRepository,
+                subscriptionPlanRepository,
+                validator,
+                new DiscountCalculator(new List<IDiscountRule>
+                {
+                    new SegmentDiscountRule(),
+                    new LoyaltyYearsDiscountRule(),
+                    new SeatCountDiscountRule(),
+                    new LoyaltyPointsDiscountRule()
+                }),
+                new PaymentFeeCalculator(new Dictionary<string, IPaymentFeeStrategy>
+                {
+                    { "CARD", new CardPaymentFeeStrategy() },
+                    { "BANK_TRANSFER", new BankTransferPaymentFeeStrategy() },
+                    { "PAYPAL", new PayPalPaymentFeeStrategy() },
+                    { "INVOICE", new InvoicePaymentFeeStrategy() }
+                }),
+                new SupportFeeCalculator(new Dictionary<string, ISupportFeeStrategy>
+                {
+                    { "START", new StartSupportFeeStrategy() },
+                    { "PRO", new ProSupportFeeStrategy() },
+                    { "ENTERPRISE", new EnterpriseSupportFeeStrategy() }
+                }),
+                new TaxRateCalculator(new Dictionary<string, ITaxRateStrategy>
+                {
+                    { "Poland", new PolandTaxRateStrategy() },
+                    { "Germany", new GermanyTaxRateStrategy() },
+                    { "Czech Republic", new CzechRepublicTaxRateStrategy() },
+                    { "Norway", new NorwayTaxRateStrategy() }
+                }, new DefaultTaxRateStrategy()))
+        {
+        }
+
+        public SubscriptionRenewalService(
+            ICustomerRepository customerRepository,
+            ISubscriptionPlanRepository subscriptionPlanRepository,
+            IRenewalServiceValidator validator,
+            IDiscountCalculator discountCalculator,
+            IPaymentFeeCalculator paymentFeeCalculator,
+            ISupportFeeCalculator supportFeeCalculator,
+            ITaxRateCalculator taxRateCalculator)
         {
             _customerRepository = customerRepository;
             _subscriptionPlanRepository = subscriptionPlanRepository;
             _validator = validator;
+            _discountCalculator = discountCalculator;
+            _paymentFeeCalculator = paymentFeeCalculator;
+            _supportFeeCalculator = supportFeeCalculator;
+            _taxRateCalculator = taxRateCalculator;
         }
 
         public RenewalInvoice CreateRenewalInvoice(
@@ -44,63 +133,19 @@ namespace LegacyRenewalApp
             }
 
             decimal baseAmount = (plan.MonthlyPricePerSeat * seatCount * 12m) + plan.SetupFee;
-            decimal discountAmount = 0m;
             string notes = string.Empty;
 
-            if (customer.Segment == "Silver")
-            {
-                discountAmount += baseAmount * 0.05m;
-                notes += "silver discount; ";
-            }
-            else if (customer.Segment == "Gold")
-            {
-                discountAmount += baseAmount * 0.10m;
-                notes += "gold discount; ";
-            }
-            else if (customer.Segment == "Platinum")
-            {
-                discountAmount += baseAmount * 0.15m;
-                notes += "platinum discount; ";
-            }
-            else if (customer.Segment == "Education" && plan.IsEducationEligible)
-            {
-                discountAmount += baseAmount * 0.20m;
-                notes += "education discount; ";
-            }
+            var discountContext = new RenewalDiscountContext(
+                customer,
+                plan,
+                seatCount,
+                useLoyaltyPoints,
+                baseAmount);
 
-            if (customer.YearsWithCompany >= 5)
-            {
-                discountAmount += baseAmount * 0.07m;
-                notes += "long-term loyalty discount; ";
-            }
-            else if (customer.YearsWithCompany >= 2)
-            {
-                discountAmount += baseAmount * 0.03m;
-                notes += "basic loyalty discount; ";
-            }
+            var discountResult = _discountCalculator.Calculate(discountContext);
 
-            if (seatCount >= 50)
-            {
-                discountAmount += baseAmount * 0.12m;
-                notes += "large team discount; ";
-            }
-            else if (seatCount >= 20)
-            {
-                discountAmount += baseAmount * 0.08m;
-                notes += "medium team discount; ";
-            }
-            else if (seatCount >= 10)
-            {
-                discountAmount += baseAmount * 0.04m;
-                notes += "small team discount; ";
-            }
-
-            if (useLoyaltyPoints && customer.LoyaltyPoints > 0)
-            {
-                int pointsToUse = customer.LoyaltyPoints > 200 ? 200 : customer.LoyaltyPoints;
-                discountAmount += pointsToUse;
-                notes += $"loyalty points used: {pointsToUse}; ";
-            }
+            decimal discountAmount = discountResult.Amount;
+            notes += discountResult.Notes;
 
             decimal subtotalAfterDiscount = baseAmount - discountAmount;
             if (subtotalAfterDiscount < 300m)
@@ -112,65 +157,21 @@ namespace LegacyRenewalApp
             decimal supportFee = 0m;
             if (includePremiumSupport)
             {
-                if (normalizedPlanCode == "START")
-                {
-                    supportFee = 250m;
-                }
-                else if (normalizedPlanCode == "PRO")
-                {
-                    supportFee = 400m;
-                }
-                else if (normalizedPlanCode == "ENTERPRISE")
-                {
-                    supportFee = 700m;
-                }
-
+                supportFee = _supportFeeCalculator.Calculate(normalizedPlanCode);
                 notes += "premium support included; ";
             }
 
-            decimal paymentFee = 0m;
-            if (normalizedPaymentMethod == "CARD")
+            var paymentFeeContext = new PaymentFeeContext
             {
-                paymentFee = (subtotalAfterDiscount + supportFee) * 0.02m;
-                notes += "card payment fee; ";
-            }
-            else if (normalizedPaymentMethod == "BANK_TRANSFER")
-            {
-                paymentFee = (subtotalAfterDiscount + supportFee) * 0.01m;
-                notes += "bank transfer fee; ";
-            }
-            else if (normalizedPaymentMethod == "PAYPAL")
-            {
-                paymentFee = (subtotalAfterDiscount + supportFee) * 0.035m;
-                notes += "paypal fee; ";
-            }
-            else if (normalizedPaymentMethod == "INVOICE")
-            {
-                paymentFee = 0m;
-                notes += "invoice payment; ";
-            }
-            else
-            {
-                throw new ArgumentException("Unsupported payment method");
-            }
+                SubTotalAfterDiscount = subtotalAfterDiscount,
+                SupportFee = supportFee
+            };
 
-            decimal taxRate = 0.20m;
-            if (customer.Country == "Poland")
-            {
-                taxRate = 0.23m;
-            }
-            else if (customer.Country == "Germany")
-            {
-                taxRate = 0.19m;
-            }
-            else if (customer.Country == "Czech Republic")
-            {
-                taxRate = 0.21m;
-            }
-            else if (customer.Country == "Norway")
-            {
-                taxRate = 0.25m;
-            }
+            var paymentFeeResult = _paymentFeeCalculator.Calculate(normalizedPaymentMethod, paymentFeeContext);
+            decimal paymentFee = paymentFeeResult.Amount;
+            notes += paymentFeeResult.Notes;
+
+            decimal taxRate = _taxRateCalculator.Calculate(customer.Country);
 
             decimal taxBase = subtotalAfterDiscount + supportFee + paymentFee;
             decimal taxAmount = taxBase * taxRate;
